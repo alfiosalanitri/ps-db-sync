@@ -1,0 +1,91 @@
+#!/bin/bash
+# A simple bash script to import/export a prestashop database to current prestashop installation directory.
+# written by Alfio Salanitri <www.alfiosalanitri.it> and are licensed under MIT license. 
+
+readonly DUMP_NAME="dump.sql"
+readonly CURRENT_DIRECTORY=$(pwd)
+readonly PARENT_DIRECTORY=$(cd $CURRENT_DIRECTORY && cd .. && pwd)
+readonly DUMP_FILE="$PARENT_DIRECTORY/$DUMP_NAME"
+
+# Get db config options from wp-config file
+readonly FILE_CONFIG="$CURRENT_DIRECTORY/app/config/parameters.php"
+if [ ! -f "$FILE_CONFIG" ]; then
+  printf "The /app/config/parameters.php file doesn't exists. Run ps-db-sync from prestashop installation directory.\n"
+  exit 1
+fi
+readonly DB_NAME=$(cat $FILE_CONFIG | grep database_name | cut -d \' -f 4)
+readonly DB_USER=$(cat $FILE_CONFIG | grep database_user | cut -d \' -f 4)
+readonly DB_PASSWORD=$(cat $FILE_CONFIG | grep database_password | cut -d \' -f 4)
+db_host=$(cat $FILE_CONFIG | grep database_host | cut -d \' -f 4)
+db_port=""
+db_dump_args=""
+
+# check if host is only ip or ip:port
+if [ "" != "$(echo $db_host | grep ":")" ]; then
+  db_port=$(echo $db_host | awk -F ":" '{print $2}')
+  if [ "" != "$db_port" ]; then
+    db_port=" -P $db_port"
+    db_host=$(echo $db_host | awk -F ":" '{print $1}')
+  fi
+fi
+
+# fix mariadb mysqldump Couldn't execute 'SELECT COLUMN_NAME, error
+MYSQL_SERVER=$(mysql -u$DB_USER -p$DB_PASSWORD -h${db_host}${db_port} -e "SELECT VERSION();" | grep -iF "maria")
+if [ "" != "$MYSQL_SERVER" ]; then
+  db_dump_args=" --column-statistics=0"
+fi
+
+# Display help usage
+display_help() {
+cat << EOF
+Copyright (C) 2022 by Alfio Salanitri
+Website: https://github.com/alfiosalanitri/wp-db-sync
+
+Usage: $(basename $0) -i
+Options
+-i
+    Backup current database to dump.sql.bkp and import dump.sql file
+  
+-e
+    Export database to dump.sql file
+    
+-h, --help
+    show this help
+-------------
+EOF
+exit 0
+}
+
+import_db() {
+  printf "Importing database from [$DUMP_FILE] dump file...\n"
+  mysqldump -u$DB_USER -p$DB_PASSWORD -h${db_host}${db_port}${db_dump_args} $DB_NAME > "$DUMP_FILE.bkp"
+  mysql -u$DB_USER -p$DB_PASSWORD -h${db_host}${db_port} -e "drop database $DB_NAME;"
+  mysql -u$DB_USER -p$DB_PASSWORD -h${db_host}${db_port} -e "create database $DB_NAME;"
+  if [ ! -f "$DUMP_FILE" ]; then
+    printf "[!] The dump file $DUMP_FILE doesn't exists. \n"
+    exit 1
+  fi
+  mysql -u$DB_USER -p$DB_PASSWORD -h${db_host}${db_port} $DB_NAME < $DUMP_FILE
+  printf "Done. Database imported.\n"
+}
+
+export_db() {
+  printf "Dumping database...\n"
+  mysqldump -u$DB_USER -p$DB_PASSWORD -h${db_host}${db_port}${db_dump_args} $DB_NAME > $DUMP_FILE
+  printf "Done. Database saved here: [$DUMP_FILE].\n"
+}
+
+if [ ! "$1" ]; then
+  display_help
+  exit 1
+fi
+
+while [ $# -gt 0 ] ; do
+  case $1 in
+    -h | --help) display_help ;;
+    -i) import_db;;
+    -e) export_db;;
+  esac
+  shift
+done
+exit 0
